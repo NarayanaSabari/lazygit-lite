@@ -89,6 +89,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.ready {
+		var cmd tea.Cmd
+		m.graphPanel, cmd = m.graphPanel.Update(msg)
+		if cmd != nil {
+			return m, cmd
+		}
+	}
+
 	return m, nil
 }
 
@@ -175,7 +183,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.commitModal.IsVisible() || m.helpModal.IsVisible() {
+	if !m.ready || m.commitModal.IsVisible() || m.helpModal.IsVisible() {
 		return m, nil
 	}
 

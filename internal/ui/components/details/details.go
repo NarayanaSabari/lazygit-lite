@@ -21,6 +21,8 @@ type Model struct {
 
 func New(styles *styles.Styles, width, height int) Model {
 	vp := viewport.New(width, height)
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 3
 	return Model{
 		viewport: vp,
 		styles:   styles,

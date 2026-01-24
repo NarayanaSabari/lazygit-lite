@@ -57,6 +57,22 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		if msg.Type == tea.MouseLeft && msg.Action == tea.MouseActionRelease {
+			index := msg.Y
+			if index >= 0 && index < len(m.commits) {
+				m.list.Select(index)
+			}
+		}
+		if msg.Type == tea.MouseWheelUp {
+			m.list.CursorUp()
+		}
+		if msg.Type == tea.MouseWheelDown {
+			m.list.CursorDown()
+		}
+	}
+
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
