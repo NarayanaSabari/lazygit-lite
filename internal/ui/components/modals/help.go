@@ -42,10 +42,17 @@ Actions:
   f         - Fetch
   b         - Branch picker
   Enter     - View commit details
+
+Clipboard:
+  y         - Copy commit hash
+  Y         - Copy commit message
+  Ctrl+Y    - Copy diff
   
 General:
   ?         - Toggle help
   q/Ctrl+C  - Quit
+
+Note: Native terminal text selection works with mouse drag.
 `
 
 	content := lipgloss.JoinVertical(lipgloss.Left,

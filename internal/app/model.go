@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/yourusername/lazygit-lite/internal/config"
 	"github.com/yourusername/lazygit-lite/internal/git"
@@ -183,6 +184,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleCommitSelection()
 	}
 
+	if keys.MatchesKey(msg, m.keyMap.CopyHash) {
+		return m.handleCopyHash()
+	}
+
+	if keys.MatchesKey(msg, m.keyMap.CopyMessage) {
+		return m.handleCopyMessage()
+	}
+
+	if keys.MatchesKey(msg, m.keyMap.CopyDiff) {
+		return m.handleCopyDiff()
+	}
+
 	var cmd tea.Cmd
 	m.graphPanel, cmd = m.graphPanel.Update(msg)
 	return m, cmd
@@ -247,6 +260,31 @@ func (m Model) handleCommitSelection() (tea.Model, tea.Cmd) {
 	commit := m.graphPanel.SelectedCommit()
 	if commit != nil {
 		return m, m.loadDiffCmd(commit)
+	}
+	return m, nil
+}
+
+func (m Model) handleCopyHash() (tea.Model, tea.Cmd) {
+	commit := m.graphPanel.SelectedCommit()
+	if commit != nil {
+		clipboard.WriteAll(commit.Hash)
+	}
+	return m, nil
+}
+
+func (m Model) handleCopyMessage() (tea.Model, tea.Cmd) {
+	commit := m.graphPanel.SelectedCommit()
+	if commit != nil {
+		clipboard.WriteAll(commit.Message)
+	}
+	return m, nil
+}
+
+func (m Model) handleCopyDiff() (tea.Model, tea.Cmd) {
+	commit := m.graphPanel.SelectedCommit()
+	if commit != nil {
+		diff, _ := m.repo.GetDiff(commit.Hash)
+		clipboard.WriteAll(diff)
 	}
 	return m, nil
 }
