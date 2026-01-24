@@ -32,10 +32,10 @@ type GraphRenderer struct {
 }
 
 type GraphBuilder struct {
-	commits   []*git.Commit
-	commitMap map[string]int
-	lanes     []string
-	laneMap   map[string]int
+	commits     []*git.Commit
+	commitMap   map[string]int
+	commitLanes map[string]int
+	activeLanes []string
 }
 
 func NewGraphRenderer(theme styles.Theme) *GraphRenderer {
@@ -53,59 +53,51 @@ func NewGraphRenderer(theme styles.Theme) *GraphRenderer {
 
 func (g *GraphRenderer) InitGraph(commits []*git.Commit) {
 	g.graph = &GraphBuilder{
-		commits:   commits,
-		commitMap: make(map[string]int),
-		lanes:     make([]string, 0),
-		laneMap:   make(map[string]int),
+		commits:     commits,
+		commitMap:   make(map[string]int),
+		commitLanes: make(map[string]int),
+		activeLanes: make([]string, 0),
 	}
 
 	for i, c := range commits {
 		g.graph.commitMap[c.Hash] = i
 	}
-
-	for i := range commits {
-		g.graph.assignLane(i)
-	}
 }
 
-func (gb *GraphBuilder) assignLane(index int) int {
-	if index >= len(gb.commits) {
-		return -1
-	}
-
-	commit := gb.commits[index]
-
-	if lane, exists := gb.laneMap[commit.Hash]; exists {
+func (gb *GraphBuilder) getLaneForCommit(commit *git.Commit) int {
+	if lane, exists := gb.commitLanes[commit.Hash]; exists {
 		return lane
 	}
 
-	targetLane := -1
+	if len(commit.Parents) > 0 {
+		parentHash := commit.Parents[0]
+		if parentLane, exists := gb.commitLanes[parentHash]; exists {
+			gb.commitLanes[commit.Hash] = parentLane
+			return parentLane
+		}
+	}
+
+	for i, hash := range gb.activeLanes {
+		if hash == "" {
+			gb.activeLanes[i] = commit.Hash
+			gb.commitLanes[commit.Hash] = i
+			return i
+		}
+	}
+
+	lane := len(gb.activeLanes)
+	gb.activeLanes = append(gb.activeLanes, commit.Hash)
+	gb.commitLanes[commit.Hash] = lane
+	return lane
+}
+
+func (gb *GraphBuilder) updateActiveLanes(commit *git.Commit, lane int) {
+	gb.activeLanes[lane] = ""
 
 	if len(commit.Parents) > 0 {
 		parentHash := commit.Parents[0]
-		if parentLane, exists := gb.laneMap[parentHash]; exists {
-			targetLane = parentLane
-		}
+		gb.activeLanes[lane] = parentHash
 	}
-
-	if targetLane == -1 {
-		for i := 0; i < len(gb.lanes); i++ {
-			if gb.lanes[i] == "" {
-				targetLane = i
-				break
-			}
-		}
-	}
-
-	if targetLane == -1 {
-		targetLane = len(gb.lanes)
-		gb.lanes = append(gb.lanes, "")
-	}
-
-	gb.lanes[targetLane] = commit.Hash
-	gb.laneMap[commit.Hash] = targetLane
-
-	return targetLane
 }
 
 func (g *GraphRenderer) RenderCommitLine(commit *git.Commit, index int) string {
@@ -113,32 +105,28 @@ func (g *GraphRenderer) RenderCommitLine(commit *git.Commit, index int) string {
 		return g.renderSimple(commit, index)
 	}
 
-	lane, exists := g.graph.laneMap[commit.Hash]
-	if !exists {
-		return g.renderSimple(commit, index)
+	lane := g.graph.getLaneForCommit(commit)
+
+	numLanes := len(g.graph.activeLanes)
+	if numLanes == 0 {
+		numLanes = 1
 	}
 
-	maxLane := 0
-	for _, l := range g.graph.laneMap {
-		if l > maxLane {
-			maxLane = l
-		}
-	}
-
-	numLanes := maxLane + 1
 	graphParts := make([]string, numLanes)
 
 	for i := 0; i < numLanes; i++ {
 		if i == lane {
 			color := g.colors[i%len(g.colors)]
 			graphParts[i] = lipgloss.NewStyle().Foreground(color).Render(CommitSymbol)
-		} else if g.graph.lanes[i] != "" {
+		} else if g.graph.activeLanes[i] != "" {
 			laneColor := g.colors[i%len(g.colors)]
 			graphParts[i] = lipgloss.NewStyle().Foreground(laneColor).Render(LineVertical)
 		} else {
 			graphParts[i] = " "
 		}
 	}
+
+	g.graph.updateActiveLanes(commit, lane)
 
 	graphStr := strings.Join(graphParts, " ")
 
