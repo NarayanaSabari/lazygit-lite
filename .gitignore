@@ -1,2 +1,6 @@
 lazygit-lite-PRD.md
-
+lazygit-lite
+*.exe
+*.dll
+*.so
+*.dylib
