@@ -1,8 +1,11 @@
 package details
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/yourusername/lazygit-lite/internal/ui/styles"
 )
 
@@ -40,7 +43,42 @@ func (m Model) View() string {
 	if m.diff == "" {
 		return m.styles.Panel.Render("Select a commit to view diff")
 	}
-	return m.viewport.View()
+
+	content := m.viewport.View()
+	scrollbar := m.renderScrollbar()
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, content, scrollbar)
+}
+
+func (m Model) renderScrollbar() string {
+	if m.height <= 0 {
+		return ""
+	}
+
+	scrollPercent := m.viewport.ScrollPercent()
+	scrollbarHeight := m.height
+
+	trackChar := "│"
+	thumbChar := "█"
+
+	scrollbarStyle := lipgloss.NewStyle().Foreground(m.styles.Theme.Border)
+	thumbStyle := lipgloss.NewStyle().Foreground(m.styles.Theme.BranchFeature)
+
+	thumbPosition := int(scrollPercent * float64(scrollbarHeight))
+	if thumbPosition >= scrollbarHeight {
+		thumbPosition = scrollbarHeight - 1
+	}
+
+	var scrollbarParts []string
+	for i := 0; i < scrollbarHeight; i++ {
+		if i == thumbPosition {
+			scrollbarParts = append(scrollbarParts, thumbStyle.Render(thumbChar))
+		} else {
+			scrollbarParts = append(scrollbarParts, scrollbarStyle.Render(trackChar))
+		}
+	}
+
+	return strings.Join(scrollbarParts, "\n")
 }
 
 func (m *Model) SetDiff(diff string) {
