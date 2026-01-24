@@ -5,6 +5,7 @@ import (
 	"github.com/yourusername/lazygit-lite/internal/config"
 	"github.com/yourusername/lazygit-lite/internal/git"
 	"github.com/yourusername/lazygit-lite/internal/ui/components/actionbar"
+	"github.com/yourusername/lazygit-lite/internal/ui/components/commitinfo"
 	"github.com/yourusername/lazygit-lite/internal/ui/components/details"
 	"github.com/yourusername/lazygit-lite/internal/ui/components/graph"
 	"github.com/yourusername/lazygit-lite/internal/ui/components/modals"
@@ -20,9 +21,10 @@ type Model struct {
 	layout *layout.Layout
 	keyMap keys.KeyMap
 
-	graphPanel   graph.Model
-	detailsPanel details.Model
-	actionBar    actionbar.Model
+	graphPanel      graph.Model
+	commitInfoPanel commitinfo.Model
+	detailsPanel    details.Model
+	actionBar       actionbar.Model
 
 	commitModal modals.CommitModal
 	helpModal   modals.HelpModal
@@ -85,7 +87,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCommitsLoaded(msg)
 
 	case diffLoadedMsg:
-		m.detailsPanel.SetCommit(msg.commit, msg.diff)
+		m.commitInfoPanel.SetCommit(msg.commit)
+		m.detailsPanel.SetDiff(msg.diff)
 		return m, nil
 	}
 
@@ -114,10 +117,11 @@ func (m Model) View() string {
 	}
 
 	leftPanel := m.styles.Panel.Render(m.graphPanel.View())
-	rightPanel := m.styles.Panel.Render(m.detailsPanel.View())
+	topRightPanel := m.styles.Panel.Render(m.commitInfoPanel.View())
+	bottomRightPanel := m.styles.Panel.Render(m.detailsPanel.View())
 	actionBarView := m.actionBar.View()
 
-	return m.layout.Render(leftPanel, rightPanel, actionBarView)
+	return m.layout.Render(leftPanel, topRightPanel, bottomRightPanel, actionBarView)
 }
 
 func (m Model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
@@ -126,20 +130,22 @@ func (m Model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	if !m.ready {
 		m.layout = layout.New(m.width, m.height, m.config.Layout.SplitRatio)
-		leftW, leftH, rightW, rightH := m.layout.Calculate()
+		leftW, leftH, rightW, rightTopH, rightBottomH := m.layout.Calculate()
 
 		commits, _ := m.repo.GetCommits(m.config.Performance.MaxCommits)
 		m.graphPanel = graph.New(commits, m.styles.Theme, leftW, leftH)
-		m.detailsPanel = details.New(m.styles, rightW, rightH)
+		m.commitInfoPanel = commitinfo.New(m.styles, rightW, rightTopH)
+		m.detailsPanel = details.New(m.styles, rightW, rightBottomH)
 		m.actionBar = actionbar.New(m.styles, m.width)
 
 		m.ready = true
 	} else {
 		m.layout.SetSize(m.width, m.height)
-		leftW, leftH, rightW, rightH := m.layout.Calculate()
+		leftW, leftH, rightW, rightTopH, rightBottomH := m.layout.Calculate()
 
 		m.graphPanel.SetSize(leftW, leftH)
-		m.detailsPanel.SetSize(rightW, rightH)
+		m.commitInfoPanel.SetSize(rightW, rightTopH)
+		m.detailsPanel.SetSize(rightW, rightBottomH)
 		m.actionBar.SetWidth(m.width)
 	}
 
@@ -189,7 +195,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	var cmds []tea.Cmd
 
-	leftW, _, rightW, _ := m.layout.Calculate()
+	leftW, _, rightW, _, _ := m.layout.Calculate()
 
 	if msg.X < leftW {
 		var cmd tea.Cmd

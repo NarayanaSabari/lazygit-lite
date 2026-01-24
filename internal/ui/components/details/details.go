@@ -1,18 +1,13 @@
 package details
 
 import (
-	"fmt"
-
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/lazygit-lite/internal/git"
 	"github.com/yourusername/lazygit-lite/internal/ui/styles"
 )
 
 type Model struct {
 	viewport viewport.Model
-	commit   *git.Commit
 	diff     string
 	styles   *styles.Styles
 	width    int
@@ -42,35 +37,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	if m.commit == nil {
-		return m.styles.Panel.Render("Select a commit to view details")
+	if m.diff == "" {
+		return m.styles.Panel.Render("Select a commit to view diff")
 	}
 	return m.viewport.View()
 }
 
-func (m *Model) SetCommit(commit *git.Commit, diff string) {
-	m.commit = commit
+func (m *Model) SetDiff(diff string) {
 	m.diff = diff
-
-	content := m.renderCommitDetails()
-	m.viewport.SetContent(content)
-}
-
-func (m *Model) renderCommitDetails() string {
-	if m.commit == nil {
-		return ""
-	}
-
-	hashStyle := lipgloss.NewStyle().Foreground(m.styles.Theme.CommitHash).Bold(true)
-	labelStyle := lipgloss.NewStyle().Foreground(m.styles.Theme.Subtext).Bold(true)
-
-	details := fmt.Sprintf("%s %s\n", labelStyle.Render("Commit:"), hashStyle.Render(m.commit.Hash))
-	details += fmt.Sprintf("%s %s <%s>\n", labelStyle.Render("Author:"), m.commit.Author, m.commit.Email)
-	details += fmt.Sprintf("%s %s\n", labelStyle.Render("Date:"), m.commit.Date.Format("Mon Jan 2 15:04:05 2006"))
-	details += fmt.Sprintf("\n%s\n\n", m.commit.Message)
-	details += m.diff
-
-	return details
+	m.viewport.SetContent(diff)
 }
 
 func (m *Model) SetSize(width, height int) {

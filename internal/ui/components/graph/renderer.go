@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -27,15 +28,14 @@ const (
 type GraphRenderer struct {
 	theme  styles.Theme
 	colors []lipgloss.Color
-	lanes  map[string]int
 	graph  *GraphBuilder
 }
 
 type GraphBuilder struct {
-	commits []*git.Commit
-	lanes   []string
-	laneMap map[string]int
-	parents map[string][]string
+	commits   []*git.Commit
+	commitMap map[string]int
+	lanes     []string
+	laneMap   map[string]int
 }
 
 func NewGraphRenderer(theme styles.Theme) *GraphRenderer {
@@ -48,29 +48,34 @@ func NewGraphRenderer(theme styles.Theme) *GraphRenderer {
 			theme.Graph4,
 			theme.Graph5,
 		},
-		lanes: make(map[string]int),
 	}
 }
 
 func (g *GraphRenderer) InitGraph(commits []*git.Commit) {
 	g.graph = &GraphBuilder{
-		commits: commits,
-		lanes:   make([]string, 0),
-		laneMap: make(map[string]int),
-		parents: make(map[string][]string),
+		commits:   commits,
+		commitMap: make(map[string]int),
+		lanes:     make([]string, 0),
+		laneMap:   make(map[string]int),
 	}
 
-	for _, c := range commits {
-		g.graph.parents[c.Hash] = c.Parents
+	for i, c := range commits {
+		g.graph.commitMap[c.Hash] = i
 	}
 
-	for _, c := range commits {
-		g.graph.assignLane(c)
+	for i := range commits {
+		g.graph.assignLane(i)
 	}
 }
 
-func (gb *GraphBuilder) assignLane(commit *git.Commit) int {
-	if lane, ok := gb.laneMap[commit.Hash]; ok {
+func (gb *GraphBuilder) assignLane(index int) int {
+	if index >= len(gb.commits) {
+		return -1
+	}
+
+	commit := gb.commits[index]
+
+	if lane, exists := gb.laneMap[commit.Hash]; exists {
 		return lane
 	}
 
@@ -78,14 +83,14 @@ func (gb *GraphBuilder) assignLane(commit *git.Commit) int {
 
 	if len(commit.Parents) > 0 {
 		parentHash := commit.Parents[0]
-		if parentLane, ok := gb.laneMap[parentHash]; ok {
+		if parentLane, exists := gb.laneMap[parentHash]; exists {
 			targetLane = parentLane
 		}
 	}
 
 	if targetLane == -1 {
-		for i, hash := range gb.lanes {
-			if hash == "" {
+		for i := 0; i < len(gb.lanes); i++ {
+			if gb.lanes[i] == "" {
 				targetLane = i
 				break
 			}
@@ -108,12 +113,24 @@ func (g *GraphRenderer) RenderCommitLine(commit *git.Commit, index int) string {
 		return g.renderSimple(commit, index)
 	}
 
-	lane := g.graph.laneMap[commit.Hash]
-	color := g.colors[lane%len(g.colors)]
+	lane, exists := g.graph.laneMap[commit.Hash]
+	if !exists {
+		return g.renderSimple(commit, index)
+	}
 
-	graphParts := make([]string, len(g.graph.lanes))
-	for i := range graphParts {
+	maxLane := 0
+	for _, l := range g.graph.laneMap {
+		if l > maxLane {
+			maxLane = l
+		}
+	}
+
+	numLanes := maxLane + 1
+	graphParts := make([]string, numLanes)
+
+	for i := 0; i < numLanes; i++ {
 		if i == lane {
+			color := g.colors[i%len(g.colors)]
 			graphParts[i] = lipgloss.NewStyle().Foreground(color).Render(CommitSymbol)
 		} else if g.graph.lanes[i] != "" {
 			laneColor := g.colors[i%len(g.colors)]
@@ -123,20 +140,16 @@ func (g *GraphRenderer) RenderCommitLine(commit *git.Commit, index int) string {
 		}
 	}
 
-	graphStr := ""
-	for _, part := range graphParts {
-		graphStr += part + " "
-	}
+	graphStr := strings.Join(graphParts, " ")
 
 	hashStyle := lipgloss.NewStyle().Foreground(g.theme.CommitHash)
-	authorStyle := lipgloss.NewStyle().Foreground(g.theme.Subtext)
+	subjectStyle := lipgloss.NewStyle().Foreground(g.theme.Foreground)
 	relTime := formatRelativeTime(commit.Date)
 
-	line := fmt.Sprintf("%s %s  %s  %s  %s",
+	line := fmt.Sprintf("%s  %s  %s  %s",
 		graphStr,
 		hashStyle.Render(commit.ShortHash),
-		truncate(commit.Subject, 50),
-		authorStyle.Render(truncate(commit.Author, 20)),
+		subjectStyle.Render(truncate(commit.Subject, 45)),
 		relTime,
 	)
 
