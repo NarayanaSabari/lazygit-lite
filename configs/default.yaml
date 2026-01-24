@@ -1,0 +1,42 @@
+ui:
+  theme: "catppuccin-mocha"
+  mouse: true
+  graph_style: "unicode"
+  show_graph: true
+  date_format: "relative"
+
+layout:
+  split_ratio: 0.5
+  min_width: 80
+
+git:
+  auto_fetch: false
+  auto_fetch_interval: 300
+  pull_rebase: true
+  push_force_with_lease: true
+
+keybindings:
+  quit: ["q", "ctrl+c"]
+  help: ["?"]
+  commit: ["c"]
+  push: ["p"]
+  pull: ["P"]
+  fetch: ["f"]
+  branch: ["b"]
+  up: ["k", "up"]
+  down: ["j", "down"]
+  left: ["h", "left"]
+  right: ["l", "right"]
+  top: ["g", "home"]
+  bottom: ["G", "end"]
+  page_up: ["ctrl+u"]
+  page_down: ["ctrl+d"]
+
+commit:
+  subject_limit: 50
+  body_wrap: 72
+  template: ""
+
+performance:
+  max_commits: 1000
+  lazy_load_threshold: 100
