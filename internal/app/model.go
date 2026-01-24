@@ -140,6 +140,10 @@ func (m Model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.actionBar = actionbar.New(m.styles, m.width)
 
 		m.ready = true
+
+		if len(commits) > 0 {
+			return m, m.loadDiffCmd(commits[0])
+		}
 	} else {
 		m.layout.SetSize(m.width, m.height)
 		leftW, leftH, rightW, rightTopH, rightBottomH := m.layout.Calculate()
