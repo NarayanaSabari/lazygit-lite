@@ -63,6 +63,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m.handleResize(msg)
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		if m.commitModal.IsVisible() {
 			return m.handleCommitModal(msg)
@@ -169,6 +172,44 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.graphPanel, cmd = m.graphPanel.Update(msg)
 	return m, cmd
+}
+
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.commitModal.IsVisible() || m.helpModal.IsVisible() {
+		return m, nil
+	}
+
+	var cmds []tea.Cmd
+
+	leftW, _, rightW, _ := m.layout.Calculate()
+
+	if msg.X < leftW {
+		var cmd tea.Cmd
+		m.graphPanel, cmd = m.graphPanel.Update(msg)
+		cmds = append(cmds, cmd)
+
+		if msg.Type == tea.MouseLeft && msg.Action == tea.MouseActionRelease {
+			cmd = m.loadDiffForSelected()
+			cmds = append(cmds, cmd)
+		}
+	} else if msg.X >= leftW+1 && msg.X < leftW+1+rightW {
+		adjustedMsg := msg
+		adjustedMsg.X = msg.X - leftW - 1
+
+		var cmd tea.Cmd
+		m.detailsPanel, cmd = m.detailsPanel.Update(adjustedMsg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) loadDiffForSelected() tea.Cmd {
+	commit := m.graphPanel.SelectedCommit()
+	if commit != nil {
+		return m.loadDiffCmd(commit)
+	}
+	return nil
 }
 
 func (m Model) handleCommitModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
