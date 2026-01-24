@@ -26,6 +26,7 @@ func (i commitItem) Description() string { return "" }
 
 func New(commits []*git.Commit, theme styles.Theme, width, height int) Model {
 	renderer := NewGraphRenderer(theme)
+	renderer.InitGraph(commits)
 
 	items := make([]list.Item, len(commits))
 	for i, commit := range commits {
