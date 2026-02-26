@@ -12,8 +12,6 @@ type KeyMap struct {
 	Branch      []string
 	Up          []string
 	Down        []string
-	Left        []string
-	Right       []string
 	Top         []string
 	Bottom      []string
 	PageUp      []string
@@ -35,8 +33,6 @@ func DefaultKeyMap() KeyMap {
 		Branch:      []string{"b"},
 		Up:          []string{"k", "up"},
 		Down:        []string{"j", "down"},
-		Left:        []string{"h", "left"},
-		Right:       []string{"l", "right"},
 		Top:         []string{"g", "home"},
 		Bottom:      []string{"G", "end"},
 		PageUp:      []string{"ctrl+u"},

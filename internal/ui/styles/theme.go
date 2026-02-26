@@ -3,7 +3,11 @@ package styles
 import "github.com/charmbracelet/lipgloss"
 
 type Theme struct {
-	Background    lipgloss.Color
+	// Tiered background colors (darkest → lightest) for visual depth.
+	Background        lipgloss.Color // Root/base — fills the entire terminal
+	BackgroundPanel   lipgloss.Color // Panels, expanded metadata areas
+	BackgroundElement lipgloss.Color // Interactive elements, hover states
+
 	Foreground    lipgloss.Color
 	Subtext       lipgloss.Color
 	Border        lipgloss.Color
@@ -16,6 +20,8 @@ type Theme struct {
 	DiffAdd       lipgloss.Color
 	DiffRemove    lipgloss.Color
 	DiffContext   lipgloss.Color
+	DiffAddBg     lipgloss.Color
+	DiffRemoveBg  lipgloss.Color
 	CommitHash    lipgloss.Color
 	Graph1        lipgloss.Color
 	Graph2        lipgloss.Color
@@ -26,7 +32,10 @@ type Theme struct {
 
 func CatppuccinMocha() Theme {
 	return Theme{
-		Background:    lipgloss.Color("#1e1e2e"),
+		Background:        lipgloss.Color("#1e1e2e"), // Catppuccin Base
+		BackgroundPanel:   lipgloss.Color("#181825"), // Catppuccin Mantle (panels)
+		BackgroundElement: lipgloss.Color("#11111b"), // Catppuccin Crust (deepest)
+
 		Foreground:    lipgloss.Color("#cdd6f4"),
 		Subtext:       lipgloss.Color("#a6adc8"),
 		Border:        lipgloss.Color("#313244"),
@@ -39,6 +48,8 @@ func CatppuccinMocha() Theme {
 		DiffAdd:       lipgloss.Color("#a6e3a1"),
 		DiffRemove:    lipgloss.Color("#f38ba8"),
 		DiffContext:   lipgloss.Color("#585b70"),
+		DiffAddBg:     lipgloss.Color("#1a2e1a"),
+		DiffRemoveBg:  lipgloss.Color("#2e1a1a"),
 		CommitHash:    lipgloss.Color("#fab387"),
 		Graph1:        lipgloss.Color("#89b4fa"),
 		Graph2:        lipgloss.Color("#cba6f7"),
