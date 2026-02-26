@@ -2,6 +2,7 @@ package git
 
 import (
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -58,23 +59,46 @@ func (r *Repository) GetDiff(hash string) (string, error) {
 }
 
 func (r *Repository) GetChangedFiles(hash string) ([]ChangedFile, error) {
-	cmd := exec.Command("git", "diff-tree", "--no-commit-id", "--name-status", "-r", hash)
-	cmd.Dir = r.path
-	output, err := cmd.Output()
+	// Get file status (A/M/D/R) via --name-status.
+	statusCmd := exec.Command("git", "diff-tree", "--no-commit-id", "--name-status", "-r", hash)
+	statusCmd.Dir = r.path
+	statusOut, err := statusCmd.Output()
 	if err != nil {
 		return nil, err
 	}
 
+	// Get per-file line additions/deletions via --numstat.
+	numstatCmd := exec.Command("git", "diff-tree", "--no-commit-id", "--numstat", "-r", hash)
+	numstatCmd.Dir = r.path
+	numstatOut, _ := numstatCmd.Output() // best-effort; ignore errors
+
+	// Build a map of path -> (additions, deletions) from numstat output.
+	stats := make(map[string][2]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(numstatOut)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) == 3 {
+			adds, _ := strconv.Atoi(parts[0]) // "-" for binary -> 0
+			dels, _ := strconv.Atoi(parts[1])
+			stats[parts[2]] = [2]int{adds, dels}
+		}
+	}
+
 	var files []ChangedFile
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
 		if line == "" {
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) == 2 {
+			s := stats[parts[1]]
 			files = append(files, ChangedFile{
-				Status: parts[0],
-				Path:   parts[1],
+				Status:    parts[0],
+				Path:      parts[1],
+				Additions: s[0],
+				Deletions: s[1],
 			})
 		}
 	}
@@ -92,13 +116,32 @@ func (r *Repository) GetFileDiff(hash, filePath string) (string, error) {
 }
 
 // GetWorkingTreeFiles returns all staged and unstaged changed files in the
-// working tree using `git status --porcelain`.
+// working tree using `git status --porcelain`, with per-file line stats
+// from `git diff --numstat HEAD`.
 func (r *Repository) GetWorkingTreeFiles() ([]ChangedFile, error) {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = r.path
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
+	}
+
+	// Get line stats for all working tree changes vs HEAD.
+	numstatCmd := exec.Command("git", "diff", "--numstat", "HEAD")
+	numstatCmd.Dir = r.path
+	numstatOut, _ := numstatCmd.Output() // best-effort
+
+	stats := make(map[string][2]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(numstatOut)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) == 3 {
+			adds, _ := strconv.Atoi(parts[0])
+			dels, _ := strconv.Atoi(parts[1])
+			stats[parts[2]] = [2]int{adds, dels}
+		}
 	}
 
 	var files []ChangedFile
@@ -125,9 +168,12 @@ func (r *Repository) GetWorkingTreeFiles() ([]ChangedFile, error) {
 			status = "M"
 		}
 
+		s := stats[path]
 		files = append(files, ChangedFile{
-			Status: status,
-			Path:   path,
+			Status:    status,
+			Path:      path,
+			Additions: s[0],
+			Deletions: s[1],
 		})
 	}
 	return files, nil

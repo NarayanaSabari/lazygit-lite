@@ -145,21 +145,41 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.MouseWheelUp:
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp:
+		m.collapseExpanded()
 		m.scrollOffset -= 3
 		if m.scrollOffset < 0 {
 			m.scrollOffset = 0
 		}
-		return m, nil
-	case tea.MouseWheelDown:
+		// Move cursor to stay within the visible viewport.
+		if m.cursor > m.scrollOffset+m.height-1 {
+			m.cursor = m.scrollOffset + m.height - 1
+		}
+		if m.cursor >= len(m.commits) {
+			m.cursor = len(m.commits) - 1
+		}
+		if m.cursor < m.scrollOffset {
+			m.cursor = m.scrollOffset
+		}
+		return m.emitSelectionChanged()
+	case msg.Button == tea.MouseButtonWheelDown:
+		m.collapseExpanded()
 		m.scrollOffset += 3
 		m.clampScroll()
-		return m, nil
-	case tea.MouseLeft:
-		if msg.Action == tea.MouseActionRelease {
-			return m.handleClick(msg.Y)
+		// Move cursor to stay within the visible viewport.
+		if m.cursor < m.scrollOffset {
+			m.cursor = m.scrollOffset
 		}
+		if m.cursor >= len(m.commits) {
+			m.cursor = len(m.commits) - 1
+		}
+		if m.cursor > m.scrollOffset+m.height-1 {
+			m.cursor = m.scrollOffset + m.height - 1
+		}
+		return m.emitSelectionChanged()
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease:
+		return m.handleClick(msg.Y)
 	}
 	return m, nil
 }
@@ -170,13 +190,39 @@ func (m Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 
 func (m Model) moveCursorDown() (Model, tea.Cmd) {
 	if m.isExpanded() {
-		// Navigate within the expanded commit's file list.
 		es := m.expandState
-		if es.FileIndex < len(es.Files)-1 {
-			es.FileIndex++
-			// Collapse any previously expanded file diff when moving file cursor.
+
+		// If a file diff is open, scroll the viewport through the diff first.
+		if es.ExpandedFile != "" && len(es.DiffLines) > 0 {
+			// Calculate the visual line of the last diff line.
+			lastDiffVisLine := m.expandedFileDiffEndVisLine()
+			// If there's still diff content below the viewport, scroll down.
+			if lastDiffVisLine >= m.scrollOffset+m.height {
+				m.scrollOffset++
+				m.clampScroll()
+				return m, nil
+			}
+			// Past the end of the diff — collapse it and move to next file.
 			es.ExpandedFile = ""
 			es.DiffLines = nil
+			if es.FileIndex < len(es.Files)-1 {
+				es.FileIndex++
+				m.ensureCursorVisible()
+				return m, nil
+			}
+			// Was the last file — collapse and move to next commit.
+			m.collapseExpanded()
+			if m.cursor < len(m.commits)-1 {
+				m.cursor++
+				m.ensureCursorVisible()
+				return m.emitSelectionChanged()
+			}
+			return m, nil
+		}
+
+		// Navigate within the expanded commit's file list.
+		if es.FileIndex < len(es.Files)-1 {
+			es.FileIndex++
 			m.ensureCursorVisible()
 			return m, nil
 		}
@@ -195,10 +241,28 @@ func (m Model) moveCursorDown() (Model, tea.Cmd) {
 func (m Model) moveCursorUp() (Model, tea.Cmd) {
 	if m.isExpanded() {
 		es := m.expandState
-		if es.FileIndex > -1 {
-			es.FileIndex--
+
+		// If a file diff is open, scroll the viewport through the diff first.
+		if es.ExpandedFile != "" && len(es.DiffLines) > 0 {
+			// Calculate the visual line of the file entry (which owns the diff).
+			fileEntryVisLine := m.cursorVisualLine()
+			// If the file entry is above the viewport, scroll up.
+			if fileEntryVisLine < m.scrollOffset {
+				m.scrollOffset--
+				if m.scrollOffset < 0 {
+					m.scrollOffset = 0
+				}
+				return m, nil
+			}
+			// At the top of the diff — collapse it and stay on this file.
 			es.ExpandedFile = ""
 			es.DiffLines = nil
+			m.ensureCursorVisible()
+			return m, nil
+		}
+
+		if es.FileIndex > -1 {
+			es.FileIndex--
 			m.ensureCursorVisible()
 			return m, nil
 		}
@@ -301,15 +365,6 @@ func (m Model) handleClick(y int) (Model, tea.Cmd) {
 			}
 			visLine += expandLines
 		}
-
-		// Connector line (only when branching) — not clickable.
-		if i < len(m.commits)-1 && m.renderer.NeedsConnectorLine(i) {
-			if visLine == targetVisLine {
-				// Clicked on a connector line — ignore.
-				return m, nil
-			}
-			visLine++
-		}
 	}
 	return m, nil
 }
@@ -381,6 +436,11 @@ func (m *Model) collapseExpanded() {
 	m.expandState = nil
 }
 
+// Collapse unconditionally closes any expanded commit.
+func (m *Model) Collapse() {
+	m.collapseExpanded()
+}
+
 func (m Model) isExpanded() bool {
 	return m.expandedIdx >= 0 && m.expandState != nil
 }
@@ -400,7 +460,9 @@ func (m Model) handleFilesLoaded(msg FilesLoadedMsg) (Model, tea.Cmd) {
 	if len(msg.Files) > 0 {
 		m.expandState.FileIndex = 0
 	}
-	m.ensureCursorVisible()
+	// The expanded content just grew (metadata + file list appeared). Make sure
+	// the cursor is still visible, but only scroll forward — never snap back.
+	m.ensureExpandedVisible()
 	return m, nil
 }
 
@@ -424,7 +486,11 @@ func (m Model) handleFileDiffLoaded(msg FileDiffLoadedMsg) (Model, tea.Cmd) {
 		diffWidth = 20
 	}
 	m.expandState.DiffLines = m.renderer.FormatDiffLines(msg.Diff, diffWidth)
-	m.ensureCursorVisible()
+	// Don't call ensureCursorVisible here — the cursor (file entry) is already
+	// visible since the user just pressed Enter on it. Calling it would snap
+	// the viewport back to the cursor line, fighting any scroll the user has
+	// already done. Just clamp to valid range.
+	m.clampScroll()
 	return m, nil
 }
 
@@ -476,15 +542,6 @@ func (m Model) View() string {
 				}
 				visLine++
 			}
-		}
-
-		// Render a connector line only when branching requires it.
-		if i < len(m.commits)-1 && m.renderer.NeedsConnectorLine(i) {
-			connectorLine := m.renderConnectorRow(i)
-			if visLine >= m.scrollOffset && visLine < m.scrollOffset+m.height {
-				lines = append(lines, connectorLine)
-			}
-			visLine++
 		}
 
 		if len(lines) >= m.height {
@@ -553,23 +610,6 @@ func (m Model) renderCommitRow(idx int) string {
 	}
 
 	return line
-}
-
-func (m Model) renderConnectorRow(idx int) string {
-	bg := m.theme.Background
-
-	connectorGraph := m.renderer.RenderConnectorLine(idx, m.width, bg)
-
-	// Pad to full width with the background.
-	visWidth := lipgloss.Width(connectorGraph)
-	if visWidth < m.width {
-		connectorGraph = connectorGraph + lipgloss.NewStyle().Background(bg).Width(m.width-visWidth).Render("")
-	}
-
-	return lipgloss.NewStyle().
-		Background(bg).
-		Width(m.width).
-		Render(connectorGraph)
 }
 
 func (m Model) renderExpandedContent(commitIdx int) []string {
@@ -769,9 +809,23 @@ func (m Model) renderFileEntry(fileIdx int, file git.ChangedFile) string {
 
 	indicatorStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext).Background(bg)
 
+	// Build the line stats string: "+N -M" (colored green/red).
+	addStyle := lipgloss.NewStyle().Foreground(m.theme.DiffAdd).Background(bg)
+	delStyle := lipgloss.NewStyle().Foreground(m.theme.DiffRemove).Background(bg)
+	var statsStr string
+	statsWidth := 0
+	if file.Additions > 0 || file.Deletions > 0 {
+		addText := fmt.Sprintf("+%d", file.Additions)
+		delText := fmt.Sprintf("-%d", file.Deletions)
+		statsStr = bgStyle.Render(" ") + addStyle.Render(addText) + bgStyle.Render(" ") + delStyle.Render(delText)
+		// Visual width: space(1) + addText + space(1) + delText
+		statsWidth = 1 + len(addText) + 1 + len(delText)
+	}
+
 	// Truncate the file path to prevent overflow.
 	// Prefix consumes: indent(6) + indicator(1) + space(1) + status(1) + space(1) = 10 chars
-	pathAvail := m.width - 10
+	// Stats are right-aligned and consume statsWidth chars.
+	pathAvail := m.width - 10 - statsWidth
 	if pathAvail < 8 {
 		pathAvail = 8
 	}
@@ -784,7 +838,8 @@ func (m Model) renderFileEntry(fileIdx int, file git.ChangedFile) string {
 	line := bgStyle.Render(indent) +
 		indicatorStyle.Render(expandIndicator) + bgStyle.Render(" ") +
 		statusStyle.Render(statusIcon) + bgStyle.Render(" ") +
-		fileStyle.Render(displayPath)
+		fileStyle.Render(displayPath) +
+		statsStr
 
 	// Pad to full width with themed background.
 	visWidth := lipgloss.Width(line)
@@ -820,6 +875,17 @@ func (m *Model) ensureCursorVisible() {
 	if cursorVisLine < m.scrollOffset {
 		m.scrollOffset = cursorVisLine
 	}
+	if cursorVisLine >= m.scrollOffset+m.height {
+		m.scrollOffset = cursorVisLine - m.height + 1
+	}
+	m.clampScroll()
+}
+
+// ensureExpandedVisible scrolls only if the cursor has moved below the visible
+// area (e.g. after new expanded content pushed it down). It never scrolls
+// backwards, so it won't fight the user's current scroll position.
+func (m *Model) ensureExpandedVisible() {
+	cursorVisLine := m.cursorVisualLine()
 	if cursorVisLine >= m.scrollOffset+m.height {
 		m.scrollOffset = cursorVisLine - m.height + 1
 	}
@@ -863,23 +929,26 @@ func (m Model) cursorVisualLine() int {
 		if i == m.expandedIdx && m.expandState != nil {
 			visLine += m.expandedLineCount()
 		}
-		// Connector line only when branching requires it.
-		if i < len(m.commits)-1 && m.renderer.NeedsConnectorLine(i) {
-			visLine++
-		}
 	}
 	return visLine
 }
 
-func (m Model) totalVisualLines() int {
-	// Each commit takes 1 line. Connector lines are only added where
-	// branching/forking requires them.
-	total := len(m.commits)
-	for i := 0; i < len(m.commits)-1; i++ {
-		if m.renderer.NeedsConnectorLine(i) {
-			total++
-		}
+// expandedFileDiffEndVisLine returns the visual line number of the last diff
+// line for the currently expanded file. Returns 0 if no diff is expanded.
+func (m Model) expandedFileDiffEndVisLine() int {
+	if !m.isExpanded() || m.expandState == nil || m.expandState.ExpandedFile == "" || len(m.expandState.DiffLines) == 0 {
+		return 0
 	}
+	// Start from the cursor's visual line (which is on the file entry).
+	visLine := m.cursorVisualLine()
+	// The diff lines appear directly below the file entry.
+	visLine += len(m.expandState.DiffLines)
+	return visLine
+}
+
+func (m Model) totalVisualLines() int {
+	// Each commit takes 1 line, plus expanded content if any.
+	total := len(m.commits)
 	if m.isExpanded() {
 		total += m.expandedLineCount()
 	}
@@ -931,6 +1000,84 @@ func (m Model) SelectedCommit() *git.Commit {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+}
+
+// SetCommits replaces the commit list and rebuilds the graph, while trying
+// to preserve the cursor position and expanded state. If the previously
+// selected commit still exists in the new list, the cursor is placed on it.
+// If a commit was expanded and still exists, it stays expanded.
+func (m *Model) SetCommits(commits []*git.Commit) {
+	// Remember the currently selected commit hash so we can restore position.
+	var prevHash string
+	if m.cursor >= 0 && m.cursor < len(m.commits) {
+		prevHash = m.commits[m.cursor].Hash
+	}
+
+	// Remember the expanded commit hash (if any) so we can preserve it.
+	var expandedHash string
+	if m.expandedIdx >= 0 && m.expandedIdx < len(m.commits) {
+		expandedHash = m.commits[m.expandedIdx].Hash
+	}
+
+	// Preserve scroll offset — we'll only call ensureCursorVisible if
+	// cursor/expand state actually changed position.
+	prevScroll := m.scrollOffset
+
+	m.commits = commits
+	m.renderer.InitGraph(commits)
+
+	// Try to find the previously selected commit in the new list.
+	cursorPreserved := false
+	newCursor := -1
+	if prevHash != "" {
+		for i, c := range commits {
+			if c.Hash == prevHash {
+				newCursor = i
+				break
+			}
+		}
+	}
+	if newCursor >= 0 {
+		cursorPreserved = (newCursor == m.cursor)
+		m.cursor = newCursor
+	} else if m.cursor >= len(commits) {
+		m.cursor = len(commits) - 1
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+	}
+	m.lastCursor = m.cursor
+
+	// Try to preserve the expanded commit.
+	expandPreserved := false
+	if expandedHash != "" {
+		newExpandedIdx := -1
+		for i, c := range commits {
+			if c.Hash == expandedHash {
+				newExpandedIdx = i
+				break
+			}
+		}
+		if newExpandedIdx >= 0 {
+			expandPreserved = (newExpandedIdx == m.expandedIdx)
+			m.expandedIdx = newExpandedIdx
+			// expandState stays as-is (files/diff still valid for same hash)
+		} else {
+			// Expanded commit no longer exists — collapse.
+			m.expandedIdx = -1
+			m.expandState = nil
+		}
+	}
+
+	// If both cursor and expand state are in the same positions, preserve the
+	// user's scroll offset instead of snapping. This prevents the file watcher
+	// reload from fighting the user's scroll position while viewing a diff.
+	if cursorPreserved && expandPreserved {
+		m.scrollOffset = prevScroll
+		m.clampScroll()
+	} else {
+		m.ensureCursorVisible()
+	}
 }
 
 func (m Model) MaxLanes() int {

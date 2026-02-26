@@ -1,11 +1,14 @@
 package git
 
 import (
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 type Repository struct {
@@ -47,8 +50,10 @@ const UncommittedHash = "0000000000000000000000000000000000000000"
 const UncommittedShortHash = "·······"
 
 type ChangedFile struct {
-	Status string // "A" added, "M" modified, "D" deleted, "R" renamed, "?" untracked
-	Path   string
+	Status    string // "A" added, "M" modified, "D" deleted, "R" renamed, "?" untracked
+	Path      string
+	Additions int // lines added (0 for binary files)
+	Deletions int // lines removed (0 for binary files)
 }
 
 type Branch struct {
@@ -70,65 +75,78 @@ func OpenRepository(path string) (*Repository, error) {
 	}, nil
 }
 
-func (r *Repository) GetCommits(limit int) ([]*Commit, error) {
-	ref, err := r.repo.Head()
-	if err != nil {
-		return nil, err
-	}
+// Path returns the filesystem path of the repository root.
+func (r *Repository) Path() string {
+	return r.path
+}
 
+func (r *Repository) GetCommits(limit int) ([]*Commit, error) {
 	refMap := r.buildRefMap()
 
-	iter, err := r.repo.Log(&git.LogOptions{
-		From: ref.Hash(),
-		All:  true,
-	})
-	if err != nil {
-		return nil, err
+	// Use git log shell command instead of go-git's Log, which fails to
+	// return commits from all branches in proper topological order.
+	// Delimiter \x00 (NUL) is safe — it cannot appear in commit metadata.
+	format := "%H%x00%P%x00%an%x00%ae%x00%at%x00%s"
+	args := []string{
+		"-C", r.path,
+		"log", "--all", "--topo-order",
+		fmt.Sprintf("--format=%s", format),
+		fmt.Sprintf("-%d", limit),
 	}
 
-	commits := make([]*Commit, 0, limit)
-	count := 0
+	cmd := exec.Command("git", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log: %w", err)
+	}
 
-	err = iter.ForEach(func(c *object.Commit) error {
-		if count >= limit {
-			return nil
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	commits := make([]*Commit, 0, len(lines))
+
+	for _, line := range lines {
+		if line == "" {
+			continue
 		}
 
-		parents := make([]string, len(c.ParentHashes))
-		for i, p := range c.ParentHashes {
-			parents[i] = p.String()
+		parts := strings.SplitN(line, "\x00", 6)
+		if len(parts) < 6 {
+			continue // malformed line
 		}
 
-		subject := c.Message
-		if idx := len(c.Message); idx > 0 {
-			for i, ch := range c.Message {
-				if ch == '\n' {
-					subject = c.Message[:i]
-					break
-				}
-			}
+		hash := parts[0]
+		parentStr := parts[1]
+		author := parts[2]
+		email := parts[3]
+		tsStr := parts[4]
+		subject := parts[5]
+
+		var parents []string
+		if parentStr != "" {
+			parents = strings.Split(parentStr, " ")
 		}
 
-		refs := refMap[c.Hash.String()]
+		ts, err := strconv.ParseInt(tsStr, 10, 64)
+		if err != nil {
+			ts = 0
+		}
+
+		refs := refMap[hash]
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
 
 		commits = append(commits, &Commit{
-			Hash:      c.Hash.String(),
-			ShortHash: c.Hash.String()[:7],
-			Author:    c.Author.Name,
-			Email:     c.Author.Email,
-			Date:      c.Author.When,
-			Message:   c.Message,
+			Hash:      hash,
+			ShortHash: shortHash,
+			Author:    author,
+			Email:     email,
+			Date:      time.Unix(ts, 0),
+			Message:   subject,
 			Subject:   subject,
 			Parents:   parents,
 			Refs:      refs,
 		})
-
-		count++
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
 	}
 
 	return commits, nil

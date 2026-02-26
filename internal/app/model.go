@@ -2,11 +2,13 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/fsnotify/fsnotify"
 	"github.com/yourusername/lazygit-lite/internal/config"
 	"github.com/yourusername/lazygit-lite/internal/git"
 	"github.com/yourusername/lazygit-lite/internal/ui/components/actionbar"
@@ -60,6 +62,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.commitModal.Init(),
 		m.loadCommitsCmd(),
+		m.watchGitDirCmd(),
 	)
 }
 
@@ -103,6 +106,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case branchesLoadedMsg:
 		return m.handleBranchesLoaded(msg)
+
+	case gitRepoChangedMsg:
+		// External .git change detected — reload commits and restart watcher.
+		return m, tea.Batch(m.loadCommitsCmd(), m.watchGitDirCmd())
 
 	case graph.SelectionChangedMsg:
 		// No auto-load needed — diffs are shown inline on expand.
@@ -305,7 +312,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc collapses any expanded commit.
 	if msg.String() == "esc" {
 		if m.graphPanel.IsExpanded() {
-			m.graphPanel.ToggleExpand(m.repo) // will collapse since cursor is on expanded
+			m.graphPanel.Collapse()
 			return m, nil
 		}
 		return m, nil
@@ -484,6 +491,9 @@ type branchesLoadedMsg struct {
 	branches []*git.Branch
 }
 
+// gitRepoChangedMsg is sent when the .git directory changes (external operations).
+type gitRepoChangedMsg struct{}
+
 func (m Model) loadCommitsCmd() tea.Cmd {
 	return func() tea.Msg {
 		commits, err := m.repo.GetCommits(m.config.Performance.MaxCommits)
@@ -501,8 +511,8 @@ func (m Model) handleCommitsLoaded(msg commitsLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, m.clearMessageAfter(3 * time.Second)
 	}
 	if m.ready && msg.commits != nil {
-		contentW, contentH := m.layout.Calculate()
-		m.graphPanel = graph.New(msg.commits, m.styles.Theme, contentW, contentH)
+		m.graphPanel.SetCommits(msg.commits)
+		m.updateBranchInfo()
 	}
 	return m, nil
 }
@@ -566,5 +576,64 @@ func (m Model) commitCmd(message string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.repo.Commit(message)
 		return operationResultMsg{operation: "commit", err: err}
+	}
+}
+
+// watchGitDirCmd returns a long-running Bubble Tea command that watches
+// the .git directory for changes using fsnotify. When a relevant change
+// is detected (refs, HEAD, index), it returns a gitRepoChangedMsg after
+// a short debounce to coalesce rapid successive events.
+func (m Model) watchGitDirCmd() tea.Cmd {
+	repoPath := m.repo.Path()
+	return func() tea.Msg {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			return nil // silently degrade — no auto-refresh
+		}
+		defer watcher.Close()
+
+		gitDir := filepath.Join(repoPath, ".git")
+		// Watch key subdirectories that change on git operations.
+		dirs := []string{
+			gitDir,
+			filepath.Join(gitDir, "refs"),
+			filepath.Join(gitDir, "refs", "heads"),
+			filepath.Join(gitDir, "refs", "tags"),
+			filepath.Join(gitDir, "refs", "remotes"),
+		}
+		for _, d := range dirs {
+			watcher.Add(d) // ignore errors for dirs that may not exist
+		}
+
+		// Debounce: wait for events to settle before signaling a reload.
+		const debounce = 300 * time.Millisecond
+		timer := time.NewTimer(debounce)
+		timer.Stop() // don't fire immediately
+
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return nil
+				}
+				// Filter out noisy events (e.g. lock files).
+				name := filepath.Base(event.Name)
+				if strings.HasSuffix(name, ".lock") {
+					continue
+				}
+				// Reset the debounce timer on each relevant event.
+				timer.Reset(debounce)
+
+			case _, ok := <-watcher.Errors:
+				if !ok {
+					return nil
+				}
+				// Ignore watcher errors — keep trying.
+
+			case <-timer.C:
+				// Debounce period elapsed — signal reload.
+				return gitRepoChangedMsg{}
+			}
+		}
 	}
 }
